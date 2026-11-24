@@ -1,6 +1,6 @@
 [package]
 name = "yorha-trainer"
-version = "0.2.0"
+version = "0.1.0"
 edition = "2021"
 description = "Single-player trainer for NieR:Automata (Steam): auto-collect without the chip, bigger pickup range, enemy respawn and a higher item stack limit"
 authors = ["Oz Vessalius (@Silhatote)"]
