@@ -38,11 +38,20 @@ const ENT_MAX_HP: u64 = 0x85C;
 
 const MAX_TRIES: u32 = 5;
 
+fn distance(a: [f32; 3], b: [f32; 3]) -> f32 {
+    ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2)).sqrt()
+}
+
+/// How far around a death the population of that enemy kind is counted.
+const AREA_RADIUS: f32 = 40.0;
+
 #[derive(Clone, Debug)]
 pub enum Event {
     Killed(u32),
     Spawned(u32),
     Failed(u32),
+    /// Not respawned: the game had already brought the area back to its population.
+    Skipped(u32),
 }
 
 #[derive(Clone)]
@@ -51,6 +60,11 @@ struct Rec {
     si: SetInfo,
     /// Spawn here instead of the setInfo's position.
     pos: Option<[f32; 3]>,
+    /// Where it died, and how many of its kind were alive around there (itself included).
+    /// The respawn is skipped if the area is already back to that many — some areas respawn
+    /// their enemies on their own, and respawning on top of that multiplies them.
+    area: [f32; 3],
+    crowd: u32,
 }
 
 struct Tracked {
@@ -122,15 +136,33 @@ impl Monitor {
         events
     }
 
-    /// Spawns another copy of the last enemy killed.
+    /// Spawns another copy of the last enemy killed (on request, so no population limit).
     pub fn respawn_last(&mut self) {
-        if let Some(rec) = self.last.clone() {
+        if let Some(mut rec) = self.last.clone() {
+            rec.crowd = u32::MAX;
             self.queue.push_back(Queued {
                 at: Instant::now(),
                 rec,
                 tries: 0,
             });
         }
+    }
+
+    /// Respawns of a kind already waiting for an area (queued or being created).
+    fn waiting(&self, obj_id: u32, at: [f32; 3]) -> u32 {
+        let near = |r: &Rec| r.obj_id == obj_id && distance(r.area, at) <= AREA_RADIUS;
+        self.queue.iter().filter(|q| near(&q.rec)).count() as u32
+            + self.awaiting.iter().filter(|(r, _)| near(r)).count() as u32
+    }
+
+    /// Living enemies of a kind within `AREA_RADIUS` of a point.
+    fn population(&self, obj_id: u32, at: [f32; 3]) -> u32 {
+        self.tracked
+            .values()
+            .filter(|t| {
+                t.obj_id == obj_id && t.alive && !t.dead && distance(t.pos, at) <= AREA_RADIUS
+            })
+            .count() as u32
     }
 
     /// Cancels anything not yet handed to the game.
@@ -217,6 +249,7 @@ impl Monitor {
 
     fn check_deaths(&mut self, p: &Process, opt: Options, events: &mut Vec<Event>) {
         let mut killed = Vec::new();
+        let mut killed_ours = Vec::new();
         let mut retry = Vec::new();
         self.tracked.retain(|&(info, handle), t| {
             if p.u32(info + INFO_HANDLE) != Some(handle) {
@@ -249,6 +282,13 @@ impl Monitor {
             } else if t.alive && !t.dead {
                 t.dead = true;
                 killed.push((t.obj_id, t.si, t.pos));
+            } else if !t.alive && !t.dead {
+                // One of our respawns killed before it was ever seen alive (it came back
+                // right into the player's attacks): that's a kill too.
+                if let Some((rec, _)) = t.ours.take() {
+                    t.dead = true;
+                    killed_ours.push(rec);
+                }
             }
             true
         });
@@ -261,6 +301,7 @@ impl Monitor {
                 });
             }
         }
+        let delay = Duration::from_secs_f32(opt.delay.clamp(0.0, 600.0));
         for (obj_id, si, pos) in killed {
             events.push(Event::Killed(obj_id));
             let use_death_pos = si.is_none() || opt.at_death;
@@ -268,11 +309,25 @@ impl Monitor {
                 obj_id,
                 si: si.unwrap_or_else(|| self.template(obj_id)),
                 pos: use_death_pos.then_some(pos),
+                area: pos,
+                // Those still alive, this one, and the ones already waiting to come back
+                // (several kills in a row would otherwise each see a smaller crowd).
+                crowd: self.population(obj_id, pos) + 1 + self.waiting(obj_id, pos),
             };
             self.last = Some(rec.clone());
             if opt.auto {
                 self.queue.push_back(Queued {
-                    at: Instant::now() + Duration::from_secs_f32(opt.delay.clamp(0.0, 600.0)),
+                    at: Instant::now() + delay,
+                    rec,
+                    tries: 0,
+                });
+            }
+        }
+        for rec in killed_ours {
+            events.push(Event::Killed(rec.obj_id));
+            if opt.auto {
+                self.queue.push_back(Queued {
+                    at: Instant::now() + delay,
                     rec,
                     tries: 0,
                 });
@@ -280,7 +335,8 @@ impl Monitor {
         }
     }
 
-    /// The setInfo of another enemy of the same kind, or a neutral one.
+    /// The setInfo of another enemy of the same kind, or a neutral one (+0x88 must be 1, or
+    /// CreateEntity refuses it).
     fn template(&self, obj_id: u32) -> SetInfo {
         if let Some(si) = self.templates.get(&obj_id) {
             return *si;
@@ -329,6 +385,10 @@ impl Monitor {
             return;
         }
         let q = self.queue.pop_front().unwrap();
+        if self.population(q.rec.obj_id, q.rec.area) >= q.rec.crowd {
+            events.push(Event::Skipped(q.rec.obj_id));
+            return;
+        }
         let buf = self.block + block::SPAWN_BUF;
         p.write(buf, &q.rec.si);
         if let Some([x, y, z]) = q.rec.pos {

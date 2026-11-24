@@ -31,6 +31,7 @@ pub enum LogKind {
     Killed(u32),
     Spawned(u32),
     SpawnFailed(u32),
+    SpawnSkipped(u32),
 }
 
 #[derive(Clone, Debug)]
@@ -347,6 +348,7 @@ fn run(shared: Arc<Mutex<Shared>>) {
                         s.push(LogKind::Spawned(o));
                     }
                     respawn::Event::Failed(o) => s.push(LogKind::SpawnFailed(o)),
+                    respawn::Event::Skipped(o) => s.push(LogKind::SpawnSkipped(o)),
                 }
             }
         }

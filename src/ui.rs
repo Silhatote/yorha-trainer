@@ -163,7 +163,8 @@ fn module(id: CheatId) -> Module {
             name: "ENEMY RESPAWN",
             key: "F3",
             summary: "Defeated enemies come back after a short delay. Ideal for farming \
-                      materials, money and experience.",
+                      materials, money and experience. If they keep dying the instant they \
+                      return, pick AT ITS SPAWN POINT so they don't land in your attacks.",
         },
         CheatId::ItemCap => Module {
             name: "STACK LIMIT",
@@ -924,6 +925,10 @@ fn describe(kind: &LogKind) -> (String, Tone) {
         LogKind::Killed(o) => (format!("Enemy {o:05X} defeated."), Tone::Plain),
         LogKind::Spawned(o) => (format!("Enemy {o:05X} is back."), Tone::Good),
         LogKind::SpawnFailed(o) => (format!("Couldn't bring enemy {o:05X} back."), Tone::Bad),
+        LogKind::SpawnSkipped(o) => (
+            format!("Enemy {o:05X}: the area already respawned it."),
+            Tone::Plain,
+        ),
     }
 }
 
