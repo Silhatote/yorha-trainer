@@ -23,17 +23,14 @@ pub fn pick_image() -> Option<PathBuf> {
         dialog
             .SetOptions(options | FOS_FORCEFILESYSTEM | FOS_FILEMUSTEXIST)
             .ok()?;
-        let name = HSTRING::from(tr!("Imagens", "Pictures"));
+        let name = HSTRING::from("Pictures");
         let spec = HSTRING::from("*.png;*.jpg;*.jpeg;*.webp");
         let filters = [COMDLG_FILTERSPEC {
             pszName: PCWSTR(name.as_ptr()),
             pszSpec: PCWSTR(spec.as_ptr()),
         }];
         let _ = dialog.SetFileTypes(&filters);
-        let _ = dialog.SetTitle(&HSTRING::from(tr!(
-            "Escolha uma imagem de fundo",
-            "Choose a background picture"
-        )));
+        let _ = dialog.SetTitle(&HSTRING::from("Choose a background picture"));
         dialog.Show(None).ok()?;
         let path = dialog
             .GetResult()

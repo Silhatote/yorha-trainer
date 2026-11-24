@@ -1,13 +1,13 @@
-//! The support drone: an original floating companion drawn with vector shapes. It bobs in the
-//! air, its eye follows the mouse and blinks, the eye color shows the connection state, and a
-//! pulse ring goes out when something happens (a cheat toggled, an enemy respawned).
+//! The support unit: an original floating companion drawn with vector shapes — a faceted
+//! diamond with a lit core, two tilted rings orbiting it with nodes running along them, and an
+//! eye that follows the mouse and blinks. The light's color shows the connection state, and a
+//! pulse goes out when something happens.
 
-use std::f32::consts::TAU;
+use std::f32::consts::{PI, TAU};
 
-use eframe::egui::{pos2, vec2, Color32, Painter, Pos2, Rect, Shape, Stroke, Vec2};
+use eframe::egui::{vec2, Color32, Painter, Pos2, Shape, Stroke, Vec2};
 
 use crate::scene::{glow, light};
-use crate::theme::rgba;
 
 pub struct Drone {
     eye: Vec2,
@@ -25,18 +25,41 @@ impl Default for Drone {
     }
 }
 
-const BODY: Color32 = Color32::from_rgb(0x26, 0x26, 0x2d);
-const BODY_LIGHT: Color32 = Color32::from_rgb(0x3a, 0x3a, 0x44);
-const TRIM: Color32 = Color32::from_rgb(0xd9, 0xd2, 0xb8);
-const PLATE: Color32 = Color32::from_rgb(0x12, 0x12, 0x18);
+const SHELL: Color32 = Color32::from_rgb(0x2c, 0x2b, 0x27);
+const SHELL_LIGHT: Color32 = Color32::from_rgb(0x4a, 0x48, 0x41);
+const EDGE: Color32 = Color32::from_rgb(0xdd, 0xd7, 0xbe);
+
+/// Points of a tilted ellipse (the ring), with a depth value for each (1 = in front).
+fn ring(c: Pos2, rx: f32, ry: f32, tilt: f32, n: usize) -> Vec<(Pos2, f32)> {
+    let (st, ct) = tilt.sin_cos();
+    (0..=n)
+        .map(|k| {
+            let a = k as f32 / n as f32 * TAU;
+            let (x, y) = (a.cos() * rx, a.sin() * ry);
+            (c + vec2(x * ct - y * st, x * st + y * ct), a.sin())
+        })
+        .collect()
+}
+
+fn draw_ring(painter: &Painter, pts: &[(Pos2, f32)], color: Color32, front: bool) {
+    for w in pts.windows(2) {
+        let depth = (w[0].1 + w[1].1) * 0.5;
+        if (depth > 0.0) == front {
+            let a = if front { 0.95 } else { 0.35 };
+            painter.line_segment(
+                [w[0].0, w[1].0],
+                Stroke::new(if front { 1.6 } else { 1.0 }, color.gamma_multiply(a)),
+            );
+        }
+    }
+}
 
 impl Drone {
-    /// Sends out a pulse ring (call when something happens).
     pub fn pulse(&mut self, t: f32) {
         self.pulse_at = t;
     }
 
-    /// Draws the drone around `center`, `s` = scale (1.0 ≈ 80 px wide).
+    /// Draws the unit around `center` (scale 1 ≈ 110 px across with the rings).
     pub fn paint(
         &mut self,
         painter: &Painter,
@@ -44,165 +67,147 @@ impl Drone {
         s: f32,
         t: f32,
         pointer: Option<Pos2>,
-        eye_color: Color32,
+        light_color: Color32,
     ) {
-        let bob = (t * 1.7).sin() * 6.0 * s;
-        let c = center + vec2(0.0, bob);
+        let c = center + vec2((t * 0.7).sin() * 3.0 * s, (t * 1.6).sin() * 7.0 * s);
 
-        // Thruster flame and its light on the "ground".
-        let flicker = 0.75 + 0.25 * (t * 31.0).sin() * (t * 17.0).cos();
-        let nozzle = c + vec2(0.0, 30.0 * s);
-        glow(
-            painter,
-            nozzle + vec2(0.0, 10.0 * s),
-            34.0 * s,
-            eye_color,
-            0.7 * flicker,
-        );
+        // Light cast below it.
+        let ground = center + vec2(0.0, 78.0 * s);
+        for k in 0..4 {
+            let f = k as f32 / 4.0;
+            let w = (34.0 - 6.0 * f) * s * (1.0 - 0.15 * (t * 1.6).sin());
+            painter.add(Shape::ellipse_filled(
+                ground,
+                vec2(w * (1.0 + f), w * 0.18 * (1.0 + f)),
+                light(light_color, 0.10 * (1.0 - f)),
+            ));
+        }
+        // A faint beam.
         painter.add(Shape::convex_polygon(
             vec![
-                nozzle + vec2(-7.0 * s, 0.0),
-                nozzle + vec2(7.0 * s, 0.0),
-                nozzle + vec2(0.0, (18.0 + 8.0 * flicker) * s),
+                c + vec2(-4.0 * s, 30.0 * s),
+                c + vec2(4.0 * s, 30.0 * s),
+                ground + vec2(26.0 * s, 0.0),
+                ground + vec2(-26.0 * s, 0.0),
             ],
-            light(eye_color, 0.9),
+            light(light_color, 0.06),
             Stroke::NONE,
         ));
-        painter.rect_filled(
-            Rect::from_center_size(nozzle + vec2(0.0, -2.0 * s), vec2(18.0 * s, 6.0 * s)),
-            2.0 * s,
-            BODY_LIGHT,
-        );
 
-        // Side fins, flapping a little.
+        let ring_a = ring(c, 52.0 * s, 14.0 * s, -0.32 + (t * 0.4).sin() * 0.05, 64);
+        let ring_b = ring(c, 44.0 * s, 10.0 * s, 0.45 + (t * 0.5).cos() * 0.05, 64);
+        draw_ring(painter, &ring_a, EDGE, false);
+        draw_ring(painter, &ring_b, light_color, false);
+
+        glow(painter, c, 70.0 * s, light_color, 0.55);
+
+        // The faceted shell: an upper and a lower diamond, lit from the top left.
+        let top = c + vec2(0.0, -34.0 * s);
+        let bottom = c + vec2(0.0, 30.0 * s);
+        let left = c + vec2(-22.0 * s, -2.0 * s);
+        let right = c + vec2(22.0 * s, -2.0 * s);
+        let front = c + vec2(0.0, 2.0 * s);
+        painter.add(Shape::convex_polygon(
+            vec![top, right, bottom, left],
+            SHELL,
+            Stroke::new(1.4 * s, EDGE.gamma_multiply(0.85)),
+        ));
+        painter.add(Shape::convex_polygon(
+            vec![top, front, left],
+            SHELL_LIGHT,
+            Stroke::NONE,
+        ));
+        painter.add(Shape::convex_polygon(
+            vec![left, front, bottom],
+            SHELL.gamma_multiply(0.85),
+            Stroke::NONE,
+        ));
+        painter.line_segment(
+            [top, front],
+            Stroke::new(1.0 * s, EDGE.gamma_multiply(0.35)),
+        );
+        painter.line_segment(
+            [left, right],
+            Stroke::new(1.0 * s, EDGE.gamma_multiply(0.25)),
+        );
+        // Small fins.
         for side in [-1.0f32, 1.0] {
-            let flap = (t * 2.3 + side).sin() * 3.0 * s;
-            let root = c + vec2(side * 38.0 * s, -4.0 * s);
-            let pts = vec![
-                root + vec2(0.0, -10.0 * s),
-                root + vec2(side * 18.0 * s, -16.0 * s + flap),
-                root + vec2(side * 22.0 * s, 6.0 * s + flap),
-                root + vec2(0.0, 10.0 * s),
-            ];
+            let flap = (t * 2.1 + side).sin() * 2.0 * s;
+            let base = c + vec2(side * 24.0 * s, -2.0 * s);
             painter.add(Shape::convex_polygon(
-                pts,
-                BODY,
-                Stroke::new(1.2 * s, TRIM.gamma_multiply(0.6)),
-            ));
-            painter.circle_filled(
-                root + vec2(side * 17.0 * s, -3.0 * s + flap),
-                1.8 * s,
-                light(eye_color, 0.8),
-            );
-        }
-
-        // Body.
-        let body = Rect::from_center_size(c, vec2(78.0 * s, 56.0 * s));
-        painter.rect_filled(
-            body.translate(vec2(0.0, 4.0 * s)),
-            10.0 * s,
-            rgba(0, 0, 0, 0.35),
-        );
-        painter.rect_filled(body, 10.0 * s, BODY);
-        painter.rect_filled(
-            Rect::from_min_size(
-                body.min + vec2(4.0 * s, 3.0 * s),
-                vec2(body.width() - 8.0 * s, 10.0 * s),
-            ),
-            6.0 * s,
-            BODY_LIGHT,
-        );
-        painter.rect_stroke(
-            body,
-            10.0 * s,
-            Stroke::new(1.4 * s, TRIM.gamma_multiply(0.7)),
-            eframe::egui::StrokeKind::Inside,
-        );
-        // Panel lines.
-        for k in [-1.0f32, 1.0] {
-            let x = c.x + k * 26.0 * s;
-            painter.line_segment(
-                [
-                    pos2(x, body.top() + 16.0 * s),
-                    pos2(x, body.bottom() - 6.0 * s),
+                vec![
+                    base,
+                    base + vec2(side * 12.0 * s, -8.0 * s + flap),
+                    base + vec2(side * 14.0 * s, 4.0 * s + flap),
                 ],
-                Stroke::new(1.0 * s, TRIM.gamma_multiply(0.25)),
-            );
+                SHELL,
+                Stroke::new(1.0 * s, EDGE.gamma_multiply(0.6)),
+            ));
         }
 
-        // Antenna with a blinking tip.
-        let base = pos2(c.x + 20.0 * s, body.top());
-        let tip = base + vec2(6.0 * s, -16.0 * s);
-        painter.line_segment([base, tip], Stroke::new(1.5 * s, TRIM.gamma_multiply(0.8)));
-        let beat = ((t * 1.2) % 1.0 < 0.12) as u8 as f32;
-        painter.circle_filled(tip, 2.4 * s, light(eye_color, 0.4 + 0.6 * beat));
-        glow(painter, tip, 10.0 * s, eye_color, 0.3 + 0.7 * beat);
-
-        // Face plate and the visor.
-        let plate = Rect::from_center_size(c + vec2(0.0, 6.0 * s), vec2(46.0 * s, 26.0 * s));
-        painter.rect_filled(plate, 6.0 * s, PLATE);
-        painter.rect_stroke(
-            plate,
-            6.0 * s,
-            Stroke::new(1.0 * s, TRIM.gamma_multiply(0.35)),
-            eframe::egui::StrokeKind::Inside,
-        );
-
-        // The eye looks toward the pointer (smoothed) and blinks now and then.
+        // The eye: looks toward the pointer, blinks now and then.
         let want = pointer
             .map(|p| {
-                let d = p - plate.center();
+                let d = p - c;
                 let len = d.length().max(1.0);
-                vec2(
-                    d.x / len * (12.0 * s).min(len * 0.1 + 2.0),
-                    d.y / len * (5.0 * s).min(len * 0.05 + 1.0),
-                )
+                vec2(d.x / len * 6.0 * s, d.y / len * 4.0 * s)
             })
-            .unwrap_or(vec2((t * 0.5).sin() * 8.0 * s, 0.0));
-        self.eye += (want - self.eye) * 0.15;
-        if t > self.next_blink + 0.14 {
-            self.next_blink = t + 2.0 + 3.0 * crate::scene::hash((t * 10.0) as u32);
+            .unwrap_or(vec2((t * 0.5).sin() * 4.0 * s, 0.0));
+        self.eye += (want - self.eye) * 0.12;
+        if t > self.next_blink + 0.13 {
+            self.next_blink = t + 2.2 + 3.0 * crate::scene::hash((t * 10.0) as u32);
         }
-        let blinking = t > self.next_blink;
-        let eye = plate.center() + self.eye;
-        let eye_h = if blinking { 1.2 * s } else { 9.0 * s };
-        glow(painter, eye, 22.0 * s, eye_color, 0.9);
-        painter.rect_filled(
-            Rect::from_center_size(eye, vec2(14.0 * s, eye_h)),
-            3.0 * s,
-            light(eye_color, 1.0),
-        );
-        painter.rect_filled(
-            Rect::from_center_size(eye, vec2(6.0 * s, eye_h * 0.5)),
-            2.0 * s,
-            light(Color32::WHITE, 0.8),
-        );
-        // Scan line across the visor.
-        let scan = plate.top() + ((t * 0.7) % 1.0) * plate.height();
-        painter.line_segment(
-            [
-                pos2(plate.left() + 3.0 * s, scan),
-                pos2(plate.right() - 3.0 * s, scan),
-            ],
-            Stroke::new(1.0 * s, light(eye_color, 0.18)),
-        );
+        let open = if t > self.next_blink { 0.15 } else { 1.0 };
+        let eye = c + vec2(0.0, -4.0 * s) + self.eye;
+        glow(painter, eye, 26.0 * s, light_color, 1.0);
+        painter.add(Shape::ellipse_filled(
+            eye,
+            vec2(8.0 * s, 4.5 * s * open),
+            light(light_color, 1.0),
+        ));
+        painter.add(Shape::ellipse_filled(
+            eye,
+            vec2(3.2 * s, 2.2 * s * open),
+            light(Color32::WHITE, 0.9),
+        ));
 
-        // Pulse ring.
+        draw_ring(painter, &ring_a, EDGE, true);
+        draw_ring(painter, &ring_b, light_color, true);
+        // Nodes running along the rings.
+        for (pts, speed, color) in [(&ring_a, 0.09, EDGE), (&ring_b, -0.13, light_color)] {
+            for k in 0..3 {
+                let f = ((t * speed + k as f32 / 3.0).rem_euclid(1.0) * (pts.len() - 1) as f32)
+                    as usize;
+                let (p, depth) = pts[f];
+                if depth > 0.0 {
+                    painter.rect_filled(
+                        eframe::egui::Rect::from_center_size(p, vec2(4.0 * s, 4.0 * s)),
+                        0.0,
+                        color,
+                    );
+                } else {
+                    painter.circle_filled(p, 1.5 * s, color.gamma_multiply(0.4));
+                }
+            }
+        }
+
+        // Event pulse.
         let age = t - self.pulse_at;
-        if (0.0..1.2).contains(&age) {
-            let f = age / 1.2;
-            painter.circle_stroke(
+        if (0.0..1.1).contains(&age) {
+            let f = age / 1.1;
+            let r = (40.0 + 100.0 * f) * s;
+            painter.add(Shape::ellipse_stroke(
                 c,
-                (50.0 + 90.0 * f) * s,
-                Stroke::new(2.0 * s * (1.0 - f), light(eye_color, 1.0 - f)),
-            );
-            for k in 0..8 {
-                let a = k as f32 / 8.0 * TAU + age;
-                let d = (40.0 + 70.0 * f) * s;
-                painter.circle_filled(
-                    c + vec2(a.cos(), a.sin()) * d,
-                    2.0 * s * (1.0 - f),
-                    light(eye_color, 1.0 - f),
+                vec2(r, r * 0.42),
+                Stroke::new(2.0 * s * (1.0 - f), light(light_color, 1.0 - f)),
+            ));
+            for k in 0..4 {
+                let a = k as f32 * PI / 2.0 + PI / 4.0;
+                let p = c + vec2(a.cos(), a.sin() * 0.42) * r;
+                painter.rect_filled(
+                    eframe::egui::Rect::from_center_size(p, vec2(4.0, 4.0) * s),
+                    0.0,
+                    light(light_color, 1.0 - f),
                 );
             }
         }

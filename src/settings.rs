@@ -5,7 +5,6 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 
 use crate::game::cheats::CheatId;
-use crate::i18n::Language;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Scenery {
@@ -21,7 +20,6 @@ pub enum Scenery {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
-    pub language: Language,
     pub scenery: Scenery,
     pub custom_background: Option<PathBuf>,
     pub animated: bool,
@@ -40,7 +38,6 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            language: Language::Auto,
             scenery: Scenery::Night,
             custom_background: None,
             animated: true,

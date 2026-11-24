@@ -1,31 +1,12 @@
-//! Colors and fonts: dark glass with warm beige lines at night, warm paper panels with dark
-//! ink by day — the look of an android's field interface.
+//! The look: warm paper panels with dark ink, thin rules and offset shadows — an android's
+//! field terminal — over the background art.
 
 use std::sync::Arc;
 
 use eframe::egui::{
-    self, Color32, CornerRadius, FontData, FontDefinitions, FontFamily, FontId, Margin, RichText,
-    Shadow, Stroke, TextStyle,
+    self, pos2, Align2, Color32, CornerRadius, FontData, FontDefinitions, FontFamily, FontId,
+    Painter, Pos2, Rect, Shadow, Stroke, TextStyle,
 };
-
-#[derive(Clone, Copy, Debug)]
-pub struct Palette {
-    pub dark: bool,
-    pub text: Color32,
-    pub title: Color32,
-    pub muted: Color32,
-    pub dim: Color32,
-    pub panel: Color32,
-    pub panel_strong: Color32,
-    pub line: Color32,
-    pub line_strong: Color32,
-    /// Lit state (cheat on): the cold glow of the lilies.
-    pub glow: Color32,
-    pub warn: Color32,
-    pub danger: Color32,
-    pub field: Color32,
-    pub shadow: Color32,
-}
 
 pub const fn rgba(r: u8, g: u8, b: u8, a: f32) -> Color32 {
     // Color32 stores premultiplied alpha.
@@ -38,107 +19,52 @@ pub const fn rgba(r: u8, g: u8, b: u8, a: f32) -> Color32 {
     )
 }
 
-/// Night: dark glass, beige ink, cold blue glow.
-pub const NIGHT: Palette = Palette {
-    dark: true,
-    text: Color32::from_rgb(0xdc, 0xd6, 0xbf),
-    title: Color32::from_rgb(0xf1, 0xec, 0xd8),
-    muted: Color32::from_rgb(0xa9, 0xa5, 0x93),
-    dim: Color32::from_rgb(0x7c, 0x7a, 0x6e),
-    panel: rgba(10, 12, 22, 0.66),
-    panel_strong: rgba(14, 16, 28, 0.9),
-    line: rgba(220, 214, 191, 0.16),
-    line_strong: rgba(220, 214, 191, 0.42),
-    glow: Color32::from_rgb(0xa8, 0xd8, 0xff),
-    warn: Color32::from_rgb(0xe6, 0xbd, 0x6e),
-    danger: Color32::from_rgb(0xe0, 0x74, 0x62),
-    field: rgba(4, 6, 12, 0.8),
-    shadow: rgba(0, 0, 0, 0.45),
-};
+/// Panel paper.
+pub const PAPER: Color32 = rgba(216, 210, 186, 0.92);
+/// A lighter sheet (hover, inputs).
+pub const PAPER_HI: Color32 = rgba(232, 227, 206, 0.96);
+/// Ink: text and lines on paper.
+pub const INK: Color32 = Color32::from_rgb(0x48, 0x45, 0x3c);
+pub const INK_SOFT: Color32 = Color32::from_rgb(0x72, 0x6d, 0x5e);
+pub const INK_FAINT: Color32 = rgba(72, 69, 60, 0.28);
+/// Selected rows, header strips, filled controls.
+pub const DARK: Color32 = rgba(62, 59, 51, 0.95);
+/// Text on dark fills.
+pub const ON_DARK: Color32 = Color32::from_rgb(0xdd, 0xd7, 0xbe);
+/// Shadow behind panels.
+pub const SHADOW: Color32 = rgba(10, 10, 8, 0.32);
 
-/// Day: warm paper panels and dark ink.
-pub const DAY: Palette = Palette {
-    dark: false,
-    text: Color32::from_rgb(0x4b, 0x48, 0x3e),
-    title: Color32::from_rgb(0x36, 0x34, 0x2c),
-    muted: Color32::from_rgb(0x6e, 0x6a, 0x5c),
-    dim: Color32::from_rgb(0x8d, 0x88, 0x77),
-    panel: rgba(222, 217, 196, 0.8),
-    panel_strong: rgba(228, 223, 203, 0.95),
-    line: rgba(75, 72, 62, 0.2),
-    line_strong: rgba(75, 72, 62, 0.5),
-    glow: Color32::from_rgb(0x2f, 0x6f, 0x8a),
-    warn: Color32::from_rgb(0xa4, 0x6c, 0x16),
-    danger: Color32::from_rgb(0xa8, 0x3e, 0x2c),
-    field: rgba(245, 241, 226, 0.95),
-    shadow: rgba(40, 38, 30, 0.22),
-};
+pub const OK: Color32 = Color32::from_rgb(0x5d, 0x8a, 0x6c);
+pub const WAIT: Color32 = Color32::from_rgb(0xb3, 0x89, 0x3a);
+pub const BAD: Color32 = Color32::from_rgb(0xa9, 0x4b, 0x3b);
+/// The drone's cold light.
+pub const GLOW: Color32 = Color32::from_rgb(0xa8, 0xd8, 0xff);
 
-impl Palette {
-    /// Adjusts the egui style (the real widgets: sliders, checkboxes, number fields).
-    pub fn apply(&self, ctx: &egui::Context) {
-        let p = *self;
-        ctx.all_styles_mut(|style| {
-            let v = &mut style.visuals;
-            *v = if p.dark {
-                egui::Visuals::dark()
-            } else {
-                egui::Visuals::light()
-            };
-            v.override_text_color = Some(p.text);
-            v.panel_fill = Color32::TRANSPARENT;
-            v.window_fill = p.panel_strong;
-            v.window_stroke = Stroke::new(1.0, p.line_strong);
-            v.window_corner_radius = CornerRadius::same(4);
-            v.menu_corner_radius = CornerRadius::same(4);
-            v.extreme_bg_color = p.field;
-            v.faint_bg_color = p.line;
-            v.selection.bg_fill = p.glow.gamma_multiply(0.45);
-            v.selection.stroke = Stroke::new(1.0, p.title);
-            v.popup_shadow = Shadow {
-                offset: [0, 6],
-                blur: 18,
-                spread: 0,
-                color: p.shadow,
-            };
-            v.window_shadow = v.popup_shadow;
-            v.slider_trailing_fill = true;
-
-            let r = CornerRadius::same(2);
-            let w = &mut v.widgets;
-            w.noninteractive.bg_stroke = Stroke::new(1.0, p.line);
-            w.noninteractive.fg_stroke = Stroke::new(1.0, p.text);
-            w.noninteractive.corner_radius = r;
-            w.inactive.bg_fill = p.line;
-            w.inactive.weak_bg_fill = p.line.gamma_multiply(0.5);
-            w.inactive.bg_stroke = Stroke::new(1.0, p.line);
-            w.inactive.fg_stroke = Stroke::new(1.5, p.text);
-            w.inactive.corner_radius = r;
-            w.hovered.bg_fill = p.line_strong;
-            w.hovered.weak_bg_fill = p.line;
-            w.hovered.bg_stroke = Stroke::new(1.0, p.line_strong);
-            w.hovered.fg_stroke = Stroke::new(1.5, p.title);
-            w.hovered.corner_radius = r;
-            w.active.bg_fill = p.glow.gamma_multiply(0.5);
-            w.active.weak_bg_fill = p.glow.gamma_multiply(0.3);
-            w.active.bg_stroke = Stroke::new(1.0, p.glow);
-            w.active.fg_stroke = Stroke::new(2.0, p.title);
-            w.active.corner_radius = r;
-            w.open = w.active;
-
-            style.spacing.item_spacing = egui::vec2(8.0, 6.0);
-            style.spacing.button_padding = egui::vec2(10.0, 4.0);
-            style.spacing.slider_rail_height = 4.0;
-            style.spacing.slider_width = 180.0;
-            style.spacing.scroll.bar_width = 5.0;
-            style.spacing.scroll.floating = true;
-            style.spacing.menu_margin = Margin::same(6);
-            style.interaction.selectable_labels = false;
-        });
-    }
+/// egui's own style, for the few built-in pieces still used (tooltips, scroll bars).
+pub fn apply(ctx: &egui::Context) {
+    ctx.all_styles_mut(|style| {
+        let v = &mut style.visuals;
+        *v = egui::Visuals::light();
+        v.override_text_color = Some(INK);
+        v.panel_fill = Color32::TRANSPARENT;
+        v.window_fill = PAPER_HI;
+        v.window_stroke = Stroke::new(1.0, INK_FAINT);
+        v.window_corner_radius = CornerRadius::ZERO;
+        v.menu_corner_radius = CornerRadius::ZERO;
+        v.popup_shadow = Shadow {
+            offset: [4, 4],
+            blur: 0,
+            spread: 0,
+            color: SHADOW,
+        };
+        v.window_shadow = v.popup_shadow;
+        style.spacing.scroll.bar_width = 4.0;
+        style.spacing.scroll.floating = true;
+        style.interaction.selectable_labels = false;
+    });
 }
 
-/// Wide geometric face for headings and HUD labels.
+/// Wide geometric face for headings and labels.
 pub const HUD: &str = "hud";
 pub const ICONS: &str = "icons";
 
@@ -148,7 +74,6 @@ fn read(name: &str) -> Option<Vec<u8>> {
 }
 
 /// Segoe UI for text, Bahnschrift for headings and labels, and the Segoe Fluent icons.
-/// Japanese comes from the system fonts.
 pub fn fonts(ctx: &egui::Context) {
     let mut defs = FontDefinitions::default();
     let mut add = |key: &str, files: &[&str]| -> bool {
@@ -167,46 +92,32 @@ pub fn fonts(ctx: &egui::Context) {
         &["bahnschrift.ttf", "segoeuisl.ttf", "segoeui.ttf"],
     );
     let has_icons = add("fluent", &["SegoeIcons.ttf", "segmdl2.ttf"]);
-    let has_jp = add("jp", &["YuGothR.ttc", "msgothic.ttc", "meiryo.ttc"]);
 
-    let base = defs
+    let mut prop = defs
         .families
         .get(&FontFamily::Proportional)
         .cloned()
         .unwrap_or_default();
-    let mut prop = base;
     if has_segoe {
         prop.insert(0, "segoe".into());
     }
-    if has_jp {
-        prop.push("jp".into());
-    }
     defs.families.insert(FontFamily::Proportional, prop.clone());
-
     let mut hud = prop.clone();
     if has_hud {
         hud.insert(0, "bahnschrift".into());
     }
     defs.families.insert(FontFamily::Name(HUD.into()), hud);
-
     let mut icons = prop;
     if has_icons {
         icons.insert(0, "fluent".into());
     }
     defs.families.insert(FontFamily::Name(ICONS.into()), icons);
-
     ctx.set_fonts(defs);
     ctx.all_styles_mut(|s| {
         s.text_styles
-            .insert(TextStyle::Body, FontId::proportional(13.5));
+            .insert(TextStyle::Body, FontId::proportional(13.0));
         s.text_styles
-            .insert(TextStyle::Button, FontId::proportional(13.5));
-        s.text_styles
-            .insert(TextStyle::Small, FontId::proportional(11.5));
-        s.text_styles.insert(
-            TextStyle::Heading,
-            FontId::new(22.0, FontFamily::Name(HUD.into())),
-        );
+            .insert(TextStyle::Small, FontId::proportional(11.0));
     });
 }
 
@@ -214,14 +125,39 @@ pub fn hud(size: f32) -> FontId {
     FontId::new(size, FontFamily::Name(HUD.into()))
 }
 
-pub fn hud_text(text: impl Into<String>, size: f32) -> RichText {
-    RichText::new(text)
-        .family(FontFamily::Name(HUD.into()))
-        .size(size)
+pub fn body(size: f32) -> FontId {
+    FontId::proportional(size)
 }
 
 pub fn icon_font(size: f32) -> FontId {
     FontId::new(size, FontFamily::Name(ICONS.into()))
+}
+
+/// Text with extra space between the letters (egui has no letter spacing). Returns the rect.
+pub fn spaced(
+    painter: &Painter,
+    pos: Pos2,
+    align: Align2,
+    text: &str,
+    font: FontId,
+    color: Color32,
+    spacing: f32,
+) -> Rect {
+    let glyphs: Vec<_> = text
+        .chars()
+        .map(|c| painter.layout_no_wrap(c.to_string(), font.clone(), color))
+        .collect();
+    let count = glyphs.len().max(1) as f32;
+    let width: f32 = glyphs.iter().map(|g| g.size().x).sum::<f32>() + spacing * (count - 1.0);
+    let height = glyphs.iter().map(|g| g.size().y).fold(0.0, f32::max);
+    let rect = align.anchor_size(pos, egui::vec2(width, height));
+    let mut x = rect.left();
+    for g in glyphs {
+        let w = g.size().x;
+        painter.galley(pos2(x, rect.top()), g, color);
+        x += w + spacing;
+    }
+    rect
 }
 
 /// Icons from Segoe Fluent Icons / Segoe MDL2 Assets.
@@ -229,9 +165,4 @@ pub mod ic {
     pub const MINIMIZE: char = '\u{E921}';
     pub const CLOSE: char = '\u{E8BB}';
     pub const SETTINGS: char = '\u{E713}';
-    pub const MAGNET: char = '\u{E896}';
-    pub const RADAR: char = '\u{E81D}';
-    pub const REFRESH: char = '\u{E72C}';
-    pub const STACK: char = '\u{E8F1}';
-    pub const FOLDER: char = '\u{E8B7}';
 }

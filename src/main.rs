@@ -6,9 +6,6 @@
 // No console window in the release executable.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-// First: the `tr!` and `trf!` macros are available to the modules below.
-#[macro_use]
-mod i18n;
 mod game;
 mod picker;
 mod scene;
@@ -17,6 +14,7 @@ mod sprites;
 mod theme;
 mod trainer;
 mod ui;
+mod widgets;
 
 use eframe::egui;
 

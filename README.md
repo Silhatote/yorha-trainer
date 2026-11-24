@@ -1,8 +1,8 @@
 # YoRHa Trainer
 
-A single-player trainer for **NieR:Automata** (Steam), written in Rust, with a game-style
-interface: animated background art, a floating support drone that reacts to what happens and
-an event log. Portuguese and English.
+A single-player trainer for **NieR:Automata** (Steam), written in Rust, with an interface in
+the style of an android's field terminal: paper panels over animated background art, a
+floating support unit that reports what happens, and an event log.
 
 ![Night lilies](docs/screenshots/night.png)
 ![Ruins in the fog](docs/screenshots/ruins.png)
