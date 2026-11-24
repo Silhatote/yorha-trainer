@@ -66,6 +66,14 @@ trainer wraps that function: when it returns 99, it returns the chosen limit ins
 - A second hook, right after `CreateEntity` returns, logs every enemy with its `setInfo`, so a
   killed enemy can come back with its original level and spawn point (or where it died).
 
+- Spawning right next to the player, on screen, works: the enemy is live (full HP) on the
+  first read. `setInfo + 0x88` must be 1, or `CreateEntity` returns 0; the other flags at
+  `+0x70..+0x8C` didn't change anything in testing.
+- Respawns that "didn't come back" while the camera faced the spot were being killed the
+  instant they appeared (they landed in the player's attacks and the Pod's fire). Some areas
+  also respawn enemies on their own, so the trainer only fills an area back up to the
+  population it had when the enemy died.
+
 ## Pitfalls found on the way
 
 - Cheat Engine's Auto Assembler encodes `imul r10, r10, D0` with an 8-bit immediate, i.e.
