@@ -165,4 +165,5 @@ pub mod ic {
     pub const MINIMIZE: char = '\u{E921}';
     pub const CLOSE: char = '\u{E8BB}';
     pub const SETTINGS: char = '\u{E713}';
+    pub const INFO: char = '\u{E946}';
 }

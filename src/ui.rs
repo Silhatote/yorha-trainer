@@ -30,6 +30,7 @@ pub struct App {
     seen: Option<Instant>,
     message: Option<(String, f64)>,
     show_settings: bool,
+    show_credits: bool,
 }
 
 /// A copy of the worker's state for one frame.
@@ -61,6 +62,7 @@ impl App {
             seen: None,
             message: None,
             show_settings: false,
+            show_credits: false,
         };
         // Debug builds: `YORHA_PREVIEW=module:3` or `settings` opens straight into that view
         // (for screenshots).
@@ -73,6 +75,7 @@ impl App {
                 app.selected = n.clamp(1, 4) - 1;
             }
             app.show_settings = v == "settings";
+            app.show_credits = v == "credits";
         }
         app
     }
@@ -242,6 +245,9 @@ fn draw(app: &mut App, ui: &mut Ui) {
     );
     footer(&painter, screen);
 
+    if app.show_credits {
+        credits_popup(app, &ctx, gear.translate(vec2(-46.0, 0.0)));
+    }
     if app.show_settings {
         settings_popup(app, &ctx, gear, now);
     }
@@ -370,6 +376,12 @@ fn title_bar(
     let gear = min.translate(vec2(-46.0, 0.0));
     if widgets::window_button(ui, gear, ic::SETTINGS, false, "settings") {
         app.show_settings = !app.show_settings;
+        app.show_credits = false;
+    }
+    let info = gear.translate(vec2(-46.0, 0.0));
+    if widgets::window_button(ui, info, ic::INFO, false, "credits") {
+        app.show_credits = !app.show_credits;
+        app.show_settings = false;
     }
 
     // Connection status.
@@ -390,7 +402,7 @@ fn title_bar(
     );
     let chip = Rect::from_min_size(
         pos2(
-            gear.left() - 18.0 - probe.width() - 32.0,
+            info.left() - 18.0 - probe.width() - 32.0,
             bar.center().y - 12.0,
         ),
         vec2(probe.width() + 32.0, 24.0),
@@ -927,7 +939,7 @@ fn footer(painter: &Painter, screen: Rect) {
         painter,
         pos2(screen.left() + 30.0, y),
         Align2::LEFT_CENTER,
-        "SINGLE-PLAYER ONLY  ·  NOT AFFILIATED WITH SQUARE ENIX OR PLATINUMGAMES",
+        "BY OZ VESSALIUS (@SILHATOTE)  ·  SINGLE-PLAYER ONLY  ·  NOT AFFILIATED WITH SQUARE ENIX OR PLATINUMGAMES",
         theme::hud(9.5),
         c,
         1.5,
@@ -1085,34 +1097,130 @@ fn settings_popup(app: &mut App, ctx: &egui::Context, gear: Rect, now: f64) {
     }
 }
 
-/// The window icon: a lit diamond, drawn in code.
+// ---------------------------------------------------------------------------------------
+// Credits popup.
+
+pub const REPO_URL: &str = "https://github.com/Silhatote/yorha-trainer";
+
+fn credits_popup(app: &mut App, ctx: &egui::Context, anchor: Rect) {
+    let w = 380.0;
+    let inner_w = w - 32.0;
+    // Sections: (label, lines).
+    let sections: [(&str, &str); 4] = [
+        ("CREATED BY", "Oz Vessalius (@Silhatote)"),
+        (
+            "BACKGROUND ART",
+            "NieR:Automata artwork. All rights belong to its creators. Upscaled with Upscayl \
+             (Real-ESRGAN).",
+        ),
+        (
+            "BUILT WITH",
+            "Rust · egui / eframe · windows-rs · Segoe UI and Bahnschrift",
+        ),
+        (
+            "RESEARCH",
+            "Game reverse engineered with Cheat Engine. Notes in docs/RESEARCH.md.",
+        ),
+    ];
+    let disclaimer = "NieR:Automata is a trademark of Square Enix, developed by PlatinumGames. \
+                      This fan-made tool is not affiliated with or endorsed by them. For \
+                      single-player use only.";
+    let (galleys, disclaimer_g) = ctx.fonts_mut(|f| {
+        let g: Vec<_> = sections
+            .iter()
+            .map(|(_, text)| f.layout(text.to_string(), theme::body(12.5), INK, inner_w))
+            .collect();
+        let d = f.layout(disclaimer.to_string(), theme::body(11.0), INK_SOFT, inner_w);
+        (g, d)
+    });
+    let body_h: f32 = galleys.iter().map(|g| g.size().y + 30.0).sum();
+    let h = 30.0 + 76.0 + body_h + 18.0 + disclaimer_g.size().y + 24.0;
+    let r = Rect::from_min_size(pos2(anchor.right() - w, anchor.bottom() + 12.0), vec2(w, h));
+    egui::Area::new(Id::unique("credits-popup"))
+        .order(Order::Foreground)
+        .fixed_pos(r.min)
+        .show(ctx, |ui| {
+            ui.set_min_size(r.size());
+            let painter = ui.painter().clone();
+            widgets::panel(&painter, r);
+            widgets::header(
+                &painter,
+                Rect::from_min_size(r.min, vec2(w, 30.0)),
+                "CREDITS",
+                "",
+            );
+            let left = r.left() + 16.0;
+            let mut y = r.top() + 50.0;
+            let title = theme::spaced(
+                &painter,
+                pos2(left, y),
+                Align2::LEFT_CENTER,
+                "YORHA TRAINER",
+                theme::hud(18.0),
+                INK,
+                3.5,
+            );
+            theme::spaced(
+                &painter,
+                pos2(title.right() + 12.0, y + 2.0),
+                Align2::LEFT_CENTER,
+                concat!("V", env!("CARGO_PKG_VERSION")),
+                theme::hud(11.0),
+                INK_SOFT,
+                1.5,
+            );
+            // The repository link.
+            let link = Rect::from_min_size(pos2(left, y + 16.0), vec2(inner_w, 26.0));
+            let resp = ui
+                .interact(link, Id::unique("credits-link"), Sense::click())
+                .on_hover_cursor(CursorIcon::PointingHand);
+            if resp.hovered() {
+                painter.rect_filled(link, 0.0, PAPER_HI);
+            }
+            theme::spaced(
+                &painter,
+                pos2(link.left() + 6.0, link.center().y),
+                Align2::LEFT_CENTER,
+                "GITHUB.COM/SILHATOTE/YORHA-TRAINER",
+                theme::hud(11.0),
+                if resp.hovered() { INK } else { INK_SOFT },
+                1.4,
+            );
+            if resp.clicked() {
+                ctx.open_url(egui::OpenUrl::new_tab(REPO_URL));
+            }
+            y += 56.0;
+            widgets::rule(&painter, pos2(left, y), pos2(r.right() - 16.0, y));
+            y += 12.0;
+            for ((label, _), g) in sections.iter().zip(galleys) {
+                theme::spaced(
+                    &painter,
+                    pos2(left, y + 6.0),
+                    Align2::LEFT_CENTER,
+                    label,
+                    theme::hud(10.5),
+                    INK_SOFT,
+                    2.0,
+                );
+                let gh = g.size().y;
+                painter.galley(pos2(left, y + 16.0), g, INK);
+                y += gh + 30.0;
+            }
+            widgets::rule(&painter, pos2(left, y), pos2(r.right() - 16.0, y));
+            painter.galley(pos2(left, y + 10.0), disclaimer_g, INK_SOFT);
+        });
+    let clicked_outside = ctx.input(|i| {
+        i.pointer.any_click()
+            && i.pointer
+                .interact_pos()
+                .is_some_and(|p| !r.contains(p) && !anchor.contains(p))
+    });
+    if clicked_outside {
+        app.show_credits = false;
+    }
+}
+
+/// The window icon (the same picture as the executable's icon).
 pub fn icon_image() -> egui::IconData {
-    const N: usize = 64;
-    let mut rgba = vec![0u8; N * N * 4];
-    let c = (N as f32 - 1.0) / 2.0;
-    for y in 0..N {
-        for x in 0..N {
-            let d = (x as f32 - c).abs() + (y as f32 - c).abs();
-            let i = (y * N + x) * 4;
-            let px = if d < 9.0 {
-                [221, 215, 190, 255]
-            } else if d < 14.0 {
-                [62, 59, 51, 255]
-            } else if d < 18.0 {
-                [221, 215, 190, 255]
-            } else if d < 27.0 {
-                [62, 59, 51, 255]
-            } else if d < 30.0 {
-                [168, 216, 255, ((30.0 - d) / 3.0 * 180.0) as u8]
-            } else {
-                [0, 0, 0, 0]
-            };
-            rgba[i..i + 4].copy_from_slice(&px);
-        }
-    }
-    egui::IconData {
-        rgba,
-        width: N as u32,
-        height: N as u32,
-    }
+    eframe::icon_data::from_png_bytes(include_bytes!("../assets/icon-256.png")).unwrap_or_default()
 }
