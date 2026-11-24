@@ -1,0 +1,5 @@
+/target
+# Local editor/tool configuration (paths specific to this machine).
+/.claude/
+# Your own background images (not part of the repository).
+/backgrounds/

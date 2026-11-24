@@ -1,0 +1,48 @@
+{ NieR:Automata (Steam) - Raise the item stack limit.
+  getItemMaxStack(itemTable, itemId) reads the per-item max from the item data
+  ([entry+8]); the add-item code clamps the quantity to it. This wraps the function:
+  when it returns 99 (the normal stack limit) it returns itemCap instead.
+  Items with their own limit (e.g. key items capped at 1) are left alone. }
+[ENABLE]
+aobscanmodule(itemMaxStack,NieRAutomata.exe,48 89 5C 24 08 57 48 83 EC 20 8B FA 48 8B D9 E8 ?? ?? ?? ?? 83 F8 07 0F 87 ?? ?? ?? ?? 48 8D 0D ?? ?? ?? ?? 48 98 44 8B 84 81 ?? ?? ?? ?? 4C 03 C1 41 FF E0 48 8D 93 B0 01 00 00 44 8B C7 48 8B CB E8 ?? ?? ?? ?? 8B 40 08)
+// alloc sizes are decimal in CE unless prefixed with $
+alloc(itemCapMem,$100,itemMaxStack)
+label(itemCap)
+label(capHook)
+label(capTramp)
+label(capDone)
+registersymbol(itemMaxStack)
+registersymbol(itemCap)
+
+itemCapMem:
+itemCap:
+  dd #9999
+
+itemCapMem+10:
+capHook:
+  sub rsp,28
+  call capTramp
+  add rsp,28
+  cmp eax,#99
+  jne capDone
+  mov eax,[itemCap]
+capDone:
+  ret
+
+// original prologue, then continue inside the real function
+capTramp:
+  mov [rsp+08],rbx
+  push rdi
+  jmp itemMaxStack+6
+
+itemMaxStack:
+  jmp capHook
+  db 90
+
+[DISABLE]
+itemMaxStack:
+  db 48 89 5C 24 08 57
+
+unregistersymbol(itemMaxStack)
+unregistersymbol(itemCap)
+dealloc(itemCapMem)

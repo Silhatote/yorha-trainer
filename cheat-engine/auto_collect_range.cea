@@ -1,0 +1,36 @@
+{ Replaces the fixed 4.0 added to the player radius (0.5) in the auto-collect
+  distance check with an editable value. Game default: 4.0 (total reach 4.5).
+  Also skips the "item model streamed in" gate (item+0xD18), because the game
+  unloads far items' models and would otherwise ignore them entirely. }
+[ENABLE]
+aobscanmodule(autoLootRangeCode,NieRAutomata.exe,F3 0F 58 15 ?? ?? ?? ?? E8 ?? ?? ?? ?? 4C 8D 43 10 48 8D 54 24 30 48 8D 4C 24 30 E8 ?? ?? ?? ?? 4C 8D 47 50 48 8D 54 24 30 48 8D 4C 24 40 E8 ?? ?? ?? ?? F3 0F 58 35)
+aobscanmodule(autoLootModelGate,NieRAutomata.exe,48 8D 8B 18 0D 00 00 E8 ?? ?? ?? ?? 85 C0 0F 84 ?? ?? ?? ?? 83 BB 30 0D 00 00 00)
+alloc(autoLootRange,$40,autoLootRangeCode)
+registersymbol(autoLootRangeCode)
+registersymbol(autoLootModelGate)
+registersymbol(autoLootRange)
+
+autoLootRange:
+  dd (float)150
+autoLootRange+8:
+  readmem(autoLootRangeCode+33,8)
+autoLootRange+10:
+  readmem(autoLootModelGate+0E,6)
+
+autoLootRangeCode+33:
+  addss xmm6,[autoLootRange]
+
+autoLootModelGate+0E:
+  db 90 90 90 90 90 90
+
+[DISABLE]
+autoLootRangeCode+33:
+  readmem(autoLootRange+8,8)
+
+autoLootModelGate+0E:
+  readmem(autoLootRange+10,6)
+
+unregistersymbol(autoLootRangeCode)
+unregistersymbol(autoLootModelGate)
+unregistersymbol(autoLootRange)
+dealloc(autoLootRange)

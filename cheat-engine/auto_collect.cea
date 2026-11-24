@@ -1,0 +1,24 @@
+{ NieR:Automata (Steam) - Auto-Collect Items works without the plug-in chip.
+  Dropped items call getChipLevel(player, 47 = Auto-Collect Items) every frame;
+  this skips the "chip level == -1" branch at both call sites. }
+[ENABLE]
+aobscanmodule(autoLootCheckA,NieRAutomata.exe,BA 2F 00 00 00 48 8B C8 E8 ?? ?? ?? ?? 83 F8 FF 7E 48)
+aobscanmodule(autoLootCheckB,NieRAutomata.exe,BA 2F 00 00 00 48 8B C8 E8 ?? ?? ?? ?? 83 F8 FF 7E 33)
+registersymbol(autoLootCheckA)
+registersymbol(autoLootCheckB)
+
+autoLootCheckA+10:
+  db 90 90
+
+autoLootCheckB+10:
+  db 90 90
+
+[DISABLE]
+autoLootCheckA+10:
+  db 7E 48
+
+autoLootCheckB+10:
+  db 7E 33
+
+unregistersymbol(autoLootCheckA)
+unregistersymbol(autoLootCheckB)

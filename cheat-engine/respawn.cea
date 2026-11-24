@@ -1,0 +1,398 @@
+{ NieR:Automata (Steam) - Respawn killed enemies.
+  1) Logs every enemy (objId 0x2xxxx) created through CreateEntity, with its spawn setInfo.
+  2) A Lua timer watches enemy HP; when one dies it is queued for respawn.
+  3) The respawn runs inside the game's layout-slot update (a game thread), calling
+     CreateEntity(manager, "", objId, setInfo) with the original setInfo.
+  Enemies that already existed before enabling are respawned where they died.
+  Hotkey F6: spawn another copy of the last killed enemy. }
+[ENABLE]
+aobscanmodule(createEntityRet,NieRAutomata.exe,41 8B 81 88 00 00 00 89 44 24 40 48 8D 54 24 20 E8 ?? ?? ?? ?? 48 81 C4 88 00 00 00 C3)
+aobscanmodule(layoutSlotUpdate,NieRAutomata.exe,48 89 5C 24 18 55 56 57 41 56 41 57 48 8D 6C 24 C9 48 81 EC F0 00 00 00 48 8B 05 ?? ?? ?? ?? 48 33 C4 48 89 45 17 8B 41 04)
+// alloc sizes are decimal in CE unless prefixed with $
+alloc(respawnMem,$1000,createEntityRet)
+alloc(spawnLog,$10000)
+label(spawnLogIdx)
+label(spawnPending)
+label(spawnObjId)
+label(spawnMgr)
+label(spawnName)
+label(spawnFn)
+label(spawnResult)
+label(respawnAuto)
+label(respawnDelay)
+label(respawnAtDeath)
+label(logHook)
+label(logCopy)
+label(logSkip)
+label(execHook)
+label(execOrig)
+label(execDo)
+label(spawnBuf)
+registersymbol(createEntityRet)
+registersymbol(layoutSlotUpdate)
+registersymbol(spawnPending)
+registersymbol(spawnObjId)
+registersymbol(spawnMgr)
+registersymbol(spawnName)
+registersymbol(spawnFn)
+registersymbol(spawnResult)
+registersymbol(respawnAuto)
+registersymbol(respawnDelay)
+registersymbol(respawnAtDeath)
+registersymbol(spawnBuf)
+registersymbol(spawnLog)
+
+respawnMem:
+spawnLogIdx:
+  dd 0
+  dd 0
+spawnPending:
+  dd 0
+spawnObjId:
+  dd 0
+spawnMgr:
+  dq 0
+spawnName:
+  dq 0
+spawnFn:
+  dq 0
+spawnResult:
+  dq 0
+respawnAuto:
+  dd 1
+respawnDelay:
+  dd (float)3
+respawnAtDeath:
+  dd 1
+
+// Runs right after CreateEntity returns (rax = entity info, [rsp+28] = objId, [rsp+30] = setInfo).
+respawnMem+100:
+logHook:
+  test rax,rax
+  jz logSkip
+  mov r10d,[rsp+28]
+  shr r10d,10
+  cmp r10d,2
+  jne logSkip
+  mov r9,[rsp+30]
+  test r9,r9
+  jz logSkip
+  mov r10d,1
+  lock xadd [spawnLogIdx],r10d
+  and r10d,7F
+  shl r10,8                 // 0x100-byte log records (CE encodes "imul r,r,D0" as imm8 -0x30)
+  mov r11,spawnLog          // separate allocation, absolute address
+  add r10,r11
+  xor r11d,r11d
+logCopy:
+  movups xmm0,[r9+r11]
+  movups [r10+r11+10],xmm0
+  add r11,10
+  cmp r11,C0
+  jb logCopy
+  mov r11d,[rsp+28]
+  mov [r10+08],r11d
+  mov r11d,[rax+30]
+  mov [r10+0C],r11d
+  mov [r10],rax
+logSkip:
+  add rsp,88
+  ret
+
+// Entry of the layout slot update (game thread). Performs one pending spawn.
+respawnMem+200:
+execHook:
+  cmp dword ptr [spawnPending],1
+  je execDo
+execOrig:
+  mov [rsp+18],rbx
+  push rbp
+  jmp layoutSlotUpdate+6
+execDo:
+  push rax
+  push rcx
+  mov eax,1
+  xor ecx,ecx
+  lock cmpxchg [spawnPending],ecx
+  pop rcx
+  pop rax
+  jne execOrig
+  push rcx
+  push rdx
+  push r8
+  push r9
+  sub rsp,28
+  mov rcx,[spawnMgr]
+  mov rdx,[spawnName]
+  mov r8d,[spawnObjId]
+  lea r9,[spawnBuf]
+  call qword ptr [spawnFn]
+  mov [spawnResult],rax
+  add rsp,28
+  pop r9
+  pop r8
+  pop rdx
+  pop rcx
+  jmp execOrig
+
+respawnMem+300:
+spawnBuf:
+
+createEntityRet+15:
+  jmp logHook
+  db 90 90 90
+
+layoutSlotUpdate:
+  jmp execHook
+  db 90
+
+{$lua}
+if syntaxcheck then return end
+if NierRespawn and NierRespawn.timer then NierRespawn.timer.destroy() end
+if NierRespawn and NierRespawn.hotkey then NierRespawn.hotkey.destroy() end
+
+local RS = { tracked = {}, queue = {}, last = nil, templates = {}, nextScan = 0, ready = false, events = {} }
+
+local function event(fmt, ...)
+  table.insert(RS.events, string.format('%.1f ', getTickCount() / 1000) .. string.format(fmt, ...))
+  if #RS.events > 200 then table.remove(RS.events, 1) end
+end
+NierRespawn = RS
+
+local LOG_SLOTS, LOG_STRIDE, SI_SIZE = 128, 0x100, 0xC0
+
+local function now() return getTickCount() / 1000 end
+
+local function ripTarget(instrAddr, dispOffset, instrLen)
+  return instrAddr + instrLen + readInteger(instrAddr + dispOffset, true)
+end
+
+local function init()
+  local base = getAddress('NieRAutomata.exe')
+  local function scan(p)
+    local r = AOBScan(p, '+X-C')
+    if not r then return nil end
+    local a = tonumber(r[0], 16)
+    r.destroy()
+    return a
+  end
+  -- Layout spawner: lea rdx,[name] ; ... ; lea rcx,[entityManager] ; call CreateEntity
+  local sp = scan('4C 8D 4D 87 48 8D 15 ?? ?? ?? ?? 89 45 FB 48 8D 0D ?? ?? ?? ?? E8')
+  -- Entity handle table lookup: count and table globals
+  local ht = scan('8B 11 85 D2 74 ?? 8B C2 C1 F8 08 0F B7 C8 3B 0D ?? ?? ?? ?? 73 ?? 48 C1 E1 04 48 03 0D')
+  if not sp or not ht then
+    print('NieR respawn: signature not found')
+    return false
+  end
+  RS.name = ripTarget(sp + 4, 3, 7)
+  RS.mgr = ripTarget(sp + 14, 3, 7)
+  RS.htCount = ripTarget(ht + 14, 2, 6)
+  RS.htTable = ripTarget(ht + 26, 3, 7)
+  writeQword('spawnMgr', RS.mgr)
+  writeQword('spawnName', RS.name)
+  writeQword('spawnFn', getAddress('createEntityRet') - 0x47)
+  RS.buf = getAddress('spawnBuf')
+  RS.log = getAddress('spawnLog')
+  return true
+end
+
+local function track(info, handle, objId, si)
+  local key = string.format('%X:%X', info, handle)
+  local t = RS.tracked[key]
+  if not t then
+    t = { info = info, handle = handle, objId = objId }
+    RS.tracked[key] = t
+  end
+  if si and not t.si then
+    t.si = si
+    RS.templates[objId] = si
+  end
+  return t
+end
+
+local function scanLog()
+  for i = 0, LOG_SLOTS - 1 do
+    local e = RS.log + i * LOG_STRIDE
+    local info = readQword(e)
+    if info and info ~= 0 then
+      local objId = readInteger(e + 8)
+      local handle = readInteger(e + 0xC)
+      local key = string.format('%X:%X', info, handle)
+      local t = RS.tracked[key]
+      if not t or not t.si then
+        track(info, handle, objId, readBytes(e + 0x10, SI_SIZE, true))
+      end
+    end
+  end
+end
+
+-- Pick up enemies that existed before the script was enabled.
+local function scanHandleTable()
+  local cnt = readInteger(RS.htCount)
+  local tbl = readQword(RS.htTable)
+  if not cnt or not tbl or cnt > 65536 then return end
+  for i = 0, cnt - 1 do
+    local h = readInteger(tbl + i * 16)
+    if h and h ~= 0 then
+      local info = readQword(tbl + i * 16 + 8)
+      if info and info ~= 0 then
+        local objId = readInteger(info + 0x28)
+        if objId and (objId >> 16) == 2 then track(info, h, objId, nil) end
+      end
+    end
+  end
+end
+
+local function genericSetInfo(objId)
+  local si = RS.templates[objId]
+  if si then return si end
+  local b = {}
+  for i = 1, SI_SIZE do b[i] = 0 end
+  local function f32(off, v)
+    local s = string.pack('<f', v)
+    for k = 1, 4 do b[off + k] = s:byte(k) end
+  end
+  local function i32(off, v)
+    local s = string.pack('<i4', v)
+    for k = 1, 4 do b[off + k] = s:byte(k) end
+  end
+  f32(0x00, 1); f32(0x14, 1); f32(0x28, 1); f32(0x3C, 1)   -- identity matrix
+  f32(0x4C, 1)                                             -- position w
+  f32(0x5C, 1)                                             -- rotation w
+  f32(0x60, 1); f32(0x64, 1); f32(0x68, 1); f32(0x6C, 1)   -- scale
+  i32(0x80, -1); i32(0x88, 1); i32(0x8C, -1)
+  return b
+end
+
+local function onKilled(t)
+  local rec = { objId = t.objId, si = t.si or genericSetInfo(t.objId) }
+  -- no spawn record, or "respawn where it died" enabled: use the death position
+  if not t.si or (readInteger('respawnAtDeath') or 0) ~= 0 then rec.pos = t.pos end
+  RS.last = rec
+  if (readInteger('respawnAuto') or 0) ~= 0 then
+    local delay = readFloat('respawnDelay') or 3
+    table.insert(RS.queue, { at = now() + delay, rec = rec })
+  end
+end
+
+local function checkDeaths()
+  for key, t in pairs(RS.tracked) do
+    local h = readInteger(t.info + 0x30)
+    if h ~= t.handle then
+      RS.tracked[key] = nil                 -- entity released (despawned or cleaned up)
+      if t.alive and not t.dead then
+        event('lost obj=%X hp=%s/%s', t.objId, tostring(t.hp), tostring(t.mhp))
+      elseif not t.alive and t.ours then
+        -- one of our respawns was discarded by the game before it ever went live: retry
+        event('vanished obj=%X tries=%d', t.objId, t.ours.tries)
+        if t.ours.tries < 5 then
+          table.insert(RS.queue, { at = now() + 1, rec = t.ours.rec, tries = t.ours.tries + 1 })
+        end
+      end
+    else
+      local ent = readQword(t.info + 0x60)
+      if ent and ent ~= 0 then
+        local hp = readInteger(ent + 0x858, true)
+        local mhp = readInteger(ent + 0x85C, true)
+        if hp and mhp and mhp > 0 and mhp < 100000000 and hp <= mhp then
+          t.hp, t.mhp = hp, mhp
+          if hp > 0 then
+            t.alive = true
+            t.pos = { readFloat(ent + 0x50), readFloat(ent + 0x54), readFloat(ent + 0x58) }
+          elseif t.alive and not t.dead then
+            t.dead = true
+            event('killed obj=%X si=%s', t.objId, tostring(t.si ~= nil))
+            onKilled(t)
+          end
+        end
+      end
+    end
+  end
+end
+
+local function pumpQueue()
+  if (readInteger('spawnPending') or 1) ~= 0 then return end
+  if RS.awaitResult then
+    local res = readQword('spawnResult') or 0
+    event('result info=%X', res)
+    -- CreateEntity fails e.g. during a loading screen: retry a few times
+    if res == 0 and RS.awaitResult.tries < 5 then
+      RS.awaitResult.tries = RS.awaitResult.tries + 1
+      table.insert(RS.queue, { at = now() + 3, rec = RS.awaitResult.rec, tries = RS.awaitResult.tries })
+    elseif res ~= 0 then
+      local t = track(res, readInteger(res + 0x30), RS.awaitResult.rec.objId, nil)
+      t.ours = RS.awaitResult
+    end
+    RS.awaitResult = false
+  end
+  local q = RS.queue[1]
+  if not q or now() < q.at then return end
+  writeQword('spawnResult', 0)
+  RS.awaitResult = { rec = q.rec, tries = q.tries or 0 }
+  writeBytes(RS.buf, q.rec.si)
+  if q.rec.pos then
+    writeFloat(RS.buf + 0x40, q.rec.pos[1])
+    writeFloat(RS.buf + 0x44, q.rec.pos[2])
+    writeFloat(RS.buf + 0x48, q.rec.pos[3])
+  end
+  writeInteger('spawnObjId', q.rec.objId)
+  writeInteger('spawnPending', 1)
+  table.remove(RS.queue, 1)
+  event('spawn obj=%X', q.rec.objId)
+end
+
+RS.timer = createTimer(nil, false)
+RS.timer.Interval = 100
+RS.timer.OnTimer = function()
+  if not RS.ready then
+    if getAddressSafe('spawnBuf') == nil then return end
+    RS.ready = init()
+    if not RS.ready then RS.timer.Enabled = false; return end
+  end
+  scanLog()
+  if now() >= RS.nextScan then
+    scanHandleTable()
+    RS.nextScan = now() + 2
+  end
+  checkDeaths()
+  pumpQueue()
+end
+RS.timer.Enabled = true
+
+RS.hotkey = createHotkey(function()
+  if RS.last then table.insert(RS.queue, { at = 0, rec = RS.last }) end
+end, VK_F6)
+{$asm}
+
+[DISABLE]
+{$lua}
+if syntaxcheck then return end
+if NierRespawn then
+  if NierRespawn.timer then NierRespawn.timer.destroy() end
+  if NierRespawn.hotkey then NierRespawn.hotkey.destroy() end
+  NierRespawn = nil
+end
+if getAddressSafe('spawnPending') then writeInteger('spawnPending', 0) end
+{$asm}
+
+createEntityRet+15:
+  db 48 81 C4 88 00 00 00 C3
+
+layoutSlotUpdate:
+  db 48 89 5C 24 18 55
+
+unregistersymbol(createEntityRet)
+unregistersymbol(layoutSlotUpdate)
+unregistersymbol(spawnPending)
+unregistersymbol(spawnObjId)
+unregistersymbol(spawnMgr)
+unregistersymbol(spawnName)
+unregistersymbol(spawnFn)
+unregistersymbol(spawnResult)
+unregistersymbol(respawnAuto)
+unregistersymbol(respawnDelay)
+unregistersymbol(respawnAtDeath)
+unregistersymbol(spawnBuf)
+unregistersymbol(spawnLog)
+dealloc(spawnLog)
+dealloc(respawnMem)
