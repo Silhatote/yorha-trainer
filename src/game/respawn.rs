@@ -19,6 +19,8 @@ pub mod block {
     pub const LOG_HOOK: u64 = 0x100;
     pub const EXEC_HOOK: u64 = 0x200;
     pub const SPAWN_BUF: u64 = 0x300;
+    /// Second exec hook (getChipLevel), for areas where the layout system doesn't update.
+    pub const EXEC_HOOK2: u64 = 0x400;
 }
 
 const LOG_SLOTS: usize = 128;
@@ -35,8 +37,13 @@ const INFO_ENTITY: u64 = 0x60;
 const ENT_POS: u64 = 0x50;
 const ENT_HP: u64 = 0x858;
 const ENT_MAX_HP: u64 = 0x85C;
+/// The enemy's level (the same value as `setInfo + 0x74`).
+const ENT_LEVEL: u64 = 0x594;
+const SI_LEVEL: usize = 0x74;
 
 const MAX_TRIES: u32 = 5;
+/// Respawns in a row that die before ever being seen alive before the chain is given up.
+const MAX_INSTANT_DEATHS: u32 = 20;
 
 fn distance(a: [f32; 3], b: [f32; 3]) -> f32 {
     ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2)).sqrt()
@@ -73,6 +80,7 @@ struct Tracked {
     alive: bool,
     dead: bool,
     pos: [f32; 3],
+    level: Option<i32>,
     /// Set when this entity is one of our respawns (to retry if the game discards it).
     ours: Option<(Rec, u32)>,
 }
@@ -178,6 +186,7 @@ impl Monitor {
             alive: false,
             dead: false,
             pos: [0.0; 3],
+            level: None,
             ours: None,
         });
         if let (Some(si), None) = (si, t.si) {
@@ -272,6 +281,9 @@ impl Monitor {
             }
             if hp > 0 {
                 t.alive = true;
+                if t.level.is_none() {
+                    t.level = p.i32(ent + ENT_LEVEL).filter(|l| (0..=999).contains(l));
+                }
                 if let Some(raw) = p.read::<12>(ent + ENT_POS) {
                     t.pos = [
                         f32::from_le_bytes(raw[0..4].try_into().unwrap()),
@@ -281,13 +293,13 @@ impl Monitor {
                 }
             } else if t.alive && !t.dead {
                 t.dead = true;
-                killed.push((t.obj_id, t.si, t.pos));
+                killed.push((t.obj_id, t.si, t.pos, t.level));
             } else if !t.alive && !t.dead {
                 // One of our respawns killed before it was ever seen alive (it came back
                 // right into the player's attacks): that's a kill too.
-                if let Some((rec, _)) = t.ours.take() {
+                if let Some((rec, tries)) = t.ours.take() {
                     t.dead = true;
-                    killed_ours.push(rec);
+                    killed_ours.push((rec, tries));
                 }
             }
             true
@@ -302,12 +314,21 @@ impl Monitor {
             }
         }
         let delay = Duration::from_secs_f32(opt.delay.clamp(0.0, 600.0));
-        for (obj_id, si, pos) in killed {
+        for (obj_id, si, pos, level) in killed {
             events.push(Event::Killed(obj_id));
             let use_death_pos = si.is_none() || opt.at_death;
+            let si = si.unwrap_or_else(|| {
+                // No spawn record (it existed before the cheat was on): a template, at the
+                // enemy's own level — a template at level 0 comes back far too weak.
+                let mut si = self.template(obj_id);
+                if let Some(level) = level {
+                    si[SI_LEVEL..SI_LEVEL + 4].copy_from_slice(&level.to_le_bytes());
+                }
+                si
+            });
             let rec = Rec {
                 obj_id,
-                si: si.unwrap_or_else(|| self.template(obj_id)),
+                si,
                 pos: use_death_pos.then_some(pos),
                 area: pos,
                 // Those still alive, this one, and the ones already waiting to come back
@@ -323,13 +344,17 @@ impl Monitor {
                 });
             }
         }
-        for rec in killed_ours {
+        for (rec, tries) in killed_ours {
             events.push(Event::Killed(rec.obj_id));
-            if opt.auto {
+            // A chain of respawns that never once come back alive is given up on, so a
+            // spawn that is dead on arrival can't loop forever.
+            if tries >= MAX_INSTANT_DEATHS {
+                events.push(Event::Failed(rec.obj_id));
+            } else if opt.auto {
                 self.queue.push_back(Queued {
                     at: Instant::now() + delay,
                     rec,
-                    tries: 0,
+                    tries: tries + 1,
                 });
             }
         }

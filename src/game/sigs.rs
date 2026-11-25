@@ -21,6 +21,9 @@ const CREATE_ENTITY_RET: &str =
     "41 8B 81 88 00 00 00 89 44 24 40 48 8D 54 24 20 E8 ?? ?? ?? ?? 48 81 C4 88 00 00 00 C3";
 /// The layout system's per-slot update: runs many times per frame on a game thread.
 const LAYOUT_SLOT_UPDATE: &str = "48 89 5C 24 18 55 56 57 41 56 41 57 48 8D 6C 24 C9 48 81 EC F0 00 00 00 48 8B 05 ?? ?? ?? ?? 48 33 C4 48 89 45 17 8B 41 04";
+/// getChipLevel(entity, type): called many times per frame by the player's update, in every
+/// area, so respawns also go out where the layout system is idle.
+const CHIP_LEVEL: &str = "44 8B C2 4C 8B C9 83 FA 1D 74 05 83 FA 24 75 0F F6 05 ?? ?? ?? ?? 20 74 06 B8 08 00 00 00 C3 48 8B 89 10 66 01 00";
 /// The layout spawner: `lea rdx,[name]; ...; lea rcx,[entityManager]; call CreateEntity`.
 const LAYOUT_SPAWNER: &str = "4C 8D 4D 87 48 8D 15 ?? ?? ?? ?? 89 45 FB 48 8D 0D ?? ?? ?? ?? E8";
 /// Entity handle lookup: the table's count and pointer globals.
@@ -36,6 +39,7 @@ pub struct Sigs {
     pub item_max_stack: Option<u64>,
     pub create_entity_ret: Option<u64>,
     pub layout_slot_update: Option<u64>,
+    pub chip_level: Option<u64>,
     /// Empty name string the layout passes to CreateEntity.
     pub spawn_name: Option<u64>,
     pub entity_manager: Option<u64>,
@@ -61,6 +65,7 @@ impl Sigs {
             item_max_stack: abs(at(ITEM_MAX_STACK)),
             create_entity_ret: abs(at(CREATE_ENTITY_RET)),
             layout_slot_update: abs(at(LAYOUT_SLOT_UPDATE)),
+            chip_level: abs(at(CHIP_LEVEL)),
             spawn_name: spawner.map(|s| rip_target(&image, base, s + 4, 3, 7)),
             entity_manager: spawner.map(|s| rip_target(&image, base, s + 14, 3, 7)),
             handle_count: handles.map(|h| rip_target(&image, base, h + 8, 2, 6)),
@@ -80,6 +85,7 @@ impl Sigs {
     pub fn respawn_ok(&self) -> bool {
         self.create_entity_ret.is_some()
             && self.layout_slot_update.is_some()
+            && self.chip_level.is_some()
             && self.spawn_name.is_some()
             && self.entity_manager.is_some()
             && self.handle_count.is_some()

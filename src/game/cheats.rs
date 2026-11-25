@@ -205,13 +205,14 @@ fn item_cap(p: &Process, s: &Sigs, cap: u32) -> Result<Installed, String> {
 
 /// The respawn hooks (the logic that decides what to spawn runs in `respawn.rs`):
 /// - after CreateEntity returns, enemies (objId 0x2xxxx) are logged with their setInfo;
-/// - at the entry of the layout slot update (a game thread), one pending spawn is performed
-///   by calling CreateEntity(entityManager, "", objId, spawnBuf).
+/// - at the entry of the layout slot update and of getChipLevel (game threads), one pending
+///   spawn is performed by calling CreateEntity(entityManager, "", objId, spawnBuf).
 fn respawn(p: &Process, s: &Sigs) -> Result<Installed, String> {
     use super::respawn::block;
-    let (Some(ret), Some(slot), Some(name), Some(mgr)) = (
+    let (Some(ret), Some(slot), Some(chip), Some(name), Some(mgr)) = (
         s.create_entity_ret,
         s.layout_slot_update,
+        s.chip_level,
         s.spawn_name,
         s.entity_manager,
     ) else {
@@ -274,18 +275,66 @@ fn respawn(p: &Process, s: &Sigs) -> Result<Installed, String> {
         Err(e) => return c.fail(p, e),
     };
 
-    // Exec hook: at the entry of the layout slot update.
+    // Exec hooks: the layout slot update, and getChipLevel (runs every frame from the
+    // player's update, also in areas where the layout system is idle). Whichever runs first
+    // takes the pending spawn.
     let exec_hook = mem + block::EXEC_HOOK;
+    let exec_hook2 = mem + block::EXEC_HOOK2;
+    let codes = exec_stub(exec_hook, mem, slot, &[0x48, 0x89, 0x5C, 0x24, 0x18, 0x55]) //  mov [rsp+18],rbx; push rbp
+        .and_then(|e1| {
+            Ok((
+                e1,
+                exec_stub(exec_hook2, mem, chip, &[0x44, 0x8B, 0xC2, 0x4C, 0x8B, 0xC9])?,
+            ))
+        }); // mov r8d,edx; mov r9,rcx
+    let (exec_code, exec_code2) = match codes {
+        Ok(c) => c,
+        Err(e) => return c.fail(p, e),
+    };
+
+    if !p.write(log_hook, &log_code)
+        || !p.write(exec_hook, &exec_code)
+        || !p.write(exec_hook2, &exec_code2)
+    {
+        return c.fail(p, "could not write the hooks");
+    }
+    let ret_site = ret + 0x15;
+    let jumps = (|| -> Result<_, String> {
+        Ok((
+            jmp_patch(ret_site, log_hook, 8)?,
+            jmp_patch(slot, exec_hook, 6)?,
+            jmp_patch(chip, exec_hook2, 6)?,
+        ))
+    })();
+    let (j1, j2, j3) = match jumps {
+        Ok(j) => j,
+        Err(e) => return c.fail(p, e),
+    };
+    for (site, bytes) in [(ret_site, &j1), (slot, &j2), (chip, &j3)] {
+        if let Err(e) = c.patch(p, site, bytes) {
+            return c.fail(p, e);
+        }
+    }
+    Ok(c)
+}
+
+/// An exec hook at `at` for the function at `site`, whose first `original.len()` bytes
+/// (whole instructions, position-independent) it replays before jumping back. If a spawn is
+/// pending and this thread wins the race for it, it first calls
+/// CreateEntity(entityManager, "", objId, spawnBuf). Only the argument registers are kept:
+/// at a function's entry nothing else is expected to survive.
+fn exec_stub(at: u64, mem: u64, site: u64, original: &[u8]) -> Result<Vec<u8>, String> {
+    use super::respawn::block;
     let pending = mem + block::PENDING;
-    let mut a = Asm::new(exec_hook);
+    let mut a = Asm::new(at);
     a.bytes(&[0x83, 0x3D])
         .rel32(Target::Abs(pending), 1)
         .bytes(&[0x01]); // cmp [pending],1
     a.bytes(&[0x0F, 0x84]).rel32(Target::Label("do"), 0); //  je do
     a.label("orig");
-    a.bytes(&[0x48, 0x89, 0x5C, 0x24, 0x18]); //             mov [rsp+18],rbx
-    a.bytes(&[0x55]); //                                     push rbp
-    a.bytes(&[0xE9]).rel32(Target::Abs(slot + 6), 0); //      jmp slot+6
+    a.bytes(original); //                                    the overwritten instructions
+    a.bytes(&[0xE9])
+        .rel32(Target::Abs(site + original.len() as u64), 0); // jmp back
     a.label("do");
     a.bytes(&[0x50, 0x51]); //                               push rax; push rcx
     a.bytes(&[0xB8, 0x01, 0x00, 0x00, 0x00]); //             mov eax,1
@@ -311,26 +360,5 @@ fn respawn(p: &Process, s: &Sigs) -> Result<Installed, String> {
     a.bytes(&[0x48, 0x83, 0xC4, 0x28]); //                   add rsp,28
     a.bytes(&[0x41, 0x59, 0x41, 0x58, 0x5A, 0x59]); //       pop r9, r8, rdx, rcx
     a.bytes(&[0xE9]).rel32(Target::Label("orig"), 0); //      jmp orig
-    let exec_code = match a.finish() {
-        Ok(code) => code,
-        Err(e) => return c.fail(p, e),
-    };
-
-    if !p.write(log_hook, &log_code) || !p.write(exec_hook, &exec_code) {
-        return c.fail(p, "could not write the hooks");
-    }
-    let ret_site = ret + 0x15;
-    let jumps =
-        jmp_patch(ret_site, log_hook, 8).and_then(|j1| Ok((j1, jmp_patch(slot, exec_hook, 6)?)));
-    let (j1, j2) = match jumps {
-        Ok(j) => j,
-        Err(e) => return c.fail(p, e),
-    };
-    if let Err(e) = c.patch(p, ret_site, &j1) {
-        return c.fail(p, e);
-    }
-    if let Err(e) = c.patch(p, slot, &j2) {
-        return c.fail(p, e);
-    }
-    Ok(c)
+    a.finish()
 }
