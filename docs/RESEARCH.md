@@ -66,6 +66,11 @@ trainer wraps that function: when it returns 99, it returns the chosen limit ins
 - A second hook, right after `CreateEntity` returns, logs every enemy with its `setInfo`, so a
   killed enemy can come back with its original level and spawn point (or where it died).
 
+- `setInfo + 0x74` is the enemy's **level** (one enemy: 480 HP at level 0, 2660 at 46). The
+  live entity keeps it at `entity + 0x594`, so an enemy without a recorded `setInfo` can still
+  come back at its own level.
+- The layout slot update doesn't run in every area, so the trainer also performs pending
+  spawns from `getChipLevel`'s entry (`0x4927B0`), which the player's update calls every frame.
 - Spawning right next to the player, on screen, works: the enemy is live (full HP) on the
   first read. `setInfo + 0x88` must be 1, or `CreateEntity` returns 0; the other flags at
   `+0x70..+0x8C` didn't change anything in testing.
